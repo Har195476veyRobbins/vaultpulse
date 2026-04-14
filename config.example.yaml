@@ -1,0 +1,34 @@
+# vaultpulse configuration example
+# Copy this file to config.yaml and fill in your values.
+
+vault:
+  # Address of your HashiCorp Vault instance
+  address: "http://127.0.0.1:8200"
+
+  # Vault token with read access to the monitored paths
+  # Prefer setting VAULT_TOKEN env variable in production
+  token: "s.xxxxxxxxxxxxxxxxxxxxxxxx"
+
+  # List of secret paths to monitor for expiry
+  paths:
+    - "secret/data/myapp/db-password"
+    - "secret/data/myapp/api-key"
+    - "pki/cert/my-service"
+
+monitor:
+  # How often to poll Vault for secret metadata
+  interval: 5m
+
+  # Alert when a secret expires within this window
+  expiry_threshold: 168h  # 7 days
+
+alert:
+  slack:
+    # Incoming Webhook URL from your Slack app settings
+    webhook_url: "https://hooks.slack.com/services/T000/B000/xxxx"
+    # Channel to post alerts to (optional, overrides webhook default)
+    channel: "#vault-alerts"
+
+  pagerduty:
+    # PagerDuty Events API v2 integration key
+    integration_key: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
