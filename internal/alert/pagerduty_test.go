@@ -9,83 +9,64 @@ import (
 )
 
 func TestPagerDutyNotifier_Send_Success(t *testing.T) {
-	var received map[string]interface{}
+	var received pdEvent
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			t.Errorf("expected POST, got %s", r.Method)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatalf("decode body: %v", err)
 		}
-		if r.Header.Get("Content-Type") != "application/json" {
-			t.Errorf("expected application/json content type")
-		}
-		json.NewDecoder(r.Body).Decode(&received)
 		w.WriteHeader(http.StatusAccepted)
 	}))
-	defer server.Close()
+	defer ts.Close()
 
-	notifier := &pagerDutyNotifier{
-		routingKey: "test-routing-key",
-		endpoint:   server.URL,
-		client:     server.Client(),
+	n := NewPagerDutyNotifier("test-key")
+	n.endpointURL = ts.URL
+
+	a := Alert{
+		Message:  "secret /prod/db expires soon",
+		Severity: SeverityCritical,
+		FiredAt:  time.Now(),
 	}
 
-	alert := &Alert{
-		Title:     "Secret expiring soon",
-		Message:   "secret/myapp/db expires in 24h",
-		Severity:  SeverityWarning,
-		SecretPath: "secret/myapp/db",
-		ExpiresAt: time.Now().Add(24 * time.Hour),
+	if err := n.Send(a); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
 	}
 
-	if err := notifier.Send(alert); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if received.RoutingKey != "test-key" {
+		t.Errorf("routing key = %q, want %q", received.RoutingKey, "test-key")
 	}
-
-	if received["routing_key"] != "test-routing-key" {
-		t.Errorf("expected routing_key to be set, got %v", received["routing_key"])
+	if received.EventAction != "trigger" {
+		t.Errorf("event_action = %q, want trigger", received.EventAction)
 	}
-	if received["event_action"] != "trigger" {
-		t.Errorf("expected event_action=trigger, got %v", received["event_action"])
+	if received.Payload.Summary != a.Message {
+		t.Errorf("summary = %q, want %q", received.Payload.Summary, a.Message)
+	}
+	if received.Payload.Source != "vaultpulse" {
+		t.Errorf("source = %q, want vaultpulse", received.Payload.Source)
 	}
 }
 
 func TestPagerDutyNotifier_Send_NonAcceptedStatus(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 	}))
-	defer server.Close()
+	defer ts.Close()
 
-	notifier := &pagerDutyNotifier{
-		routingKey: "key",
-		endpoint:   server.URL,
-		client:     server.Client(),
-	}
+	n := NewPagerDutyNotifier("bad-key")
+	n.endpointURL = ts.URL
 
-	alert := &Alert{
-		Title:    "Test",
-		Message:  "msg",
-		Severity: SeverityCritical,
-	}
-
-	if err := notifier.Send(alert); err == nil {
-		t.Error("expected error for non-202 status, got nil")
+	err := n.Send(Alert{Message: "test", Severity: SeverityWarning, FiredAt: time.Now()})
+	if err == nil {
+		t.Fatal("expected error for non-202 status, got nil")
 	}
 }
 
 func TestPagerDutyNotifier_Send_BadURL(t *testing.T) {
-	notifier := &pagerDutyNotifier{
-		routingKey: "key",
-		endpoint:   "http://127.0.0.1:0",
-		client:     &http.Client{},
-	}
+	n := NewPagerDutyNotifier("key")
+	n.endpointURL = "http://127.0.0.1:0" // nothing listening
 
-	alert := &Alert{
-		Title:    "Test",
-		Message:  "msg",
-		Severity: SeverityWarning,
-	}
-
-	if err := notifier.Send(alert); err == nil {
-		t.Error("expected error for bad URL, got nil")
+	err := n.Send(Alert{Message: "test", Severity: SeverityInfo, FiredAt: time.Now()})
+	if err == nil {
+		t.Fatal("expected connection error, got nil")
 	}
 }

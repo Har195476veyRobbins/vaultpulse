@@ -8,20 +8,20 @@ import (
 	"time"
 )
 
-const defaultPagerDutyEndpoint = "https://events.pagerduty.com/v2/enqueue"
+const pagerDutyEventURL = "https://events.pagerduty.com/v2/enqueue"
 
-type pagerDutyNotifier struct {
-	routingKey string
-	endpoint   string
-	client     *http.Client
+// PagerDutyNotifier sends alerts to PagerDuty via the Events API v2.
+type PagerDutyNotifier struct {
+	integrationKey string
+	httpClient     *http.Client
+	endpointURL    string
 }
 
 type pdPayload struct {
 	Summary   string `json:"summary"`
 	Severity  string `json:"severity"`
-	Source    string `json:"source"`
 	Timestamp string `json:"timestamp"`
-	CustomDetails map[string]string `json:"custom_details,omitempty"`
+	Source    string `json:"source"`
 }
 
 type pdEvent struct {
@@ -30,33 +30,25 @@ type pdEvent struct {
 	Payload     pdPayload `json:"payload"`
 }
 
-// NewPagerDutyNotifier creates a new PagerDuty notifier using the given routing key.
-func NewPagerDutyNotifier(routingKey string) Notifier {
-	return &pagerDutyNotifier{
-		routingKey: routingKey,
-		endpoint:   defaultPagerDutyEndpoint,
-		client:     &http.Client{Timeout: 10 * time.Second},
+// NewPagerDutyNotifier creates a PagerDutyNotifier with the given integration key.
+func NewPagerDutyNotifier(integrationKey string) *PagerDutyNotifier {
+	return &PagerDutyNotifier{
+		integrationKey: integrationKey,
+		httpClient:     &http.Client{Timeout: 10 * time.Second},
+		endpointURL:    pagerDutyEventURL,
 	}
 }
 
-func (p *pagerDutyNotifier) Send(a *Alert) error {
-	severity := "warning"
-	if a.Severity == SeverityCritical {
-		severity = "critical"
-	}
-
+// Send delivers an Alert to PagerDuty.
+func (p *PagerDutyNotifier) Send(a Alert) error {
 	event := pdEvent{
-		RoutingKey:  p.routingKey,
+		RoutingKey:  p.integrationKey,
 		EventAction: "trigger",
 		Payload: pdPayload{
-			Summary:   fmt.Sprintf("%s: %s", a.Title, a.Message),
-			Severity:  severity,
+			Summary:   a.Message,
+			Severity:  string(a.Severity),
+			Timestamp: a.FiredAt.UTC().Format(time.RFC3339),
 			Source:    "vaultpulse",
-			Timestamp: time.Now().UTC().Format(time.RFC3339),
-			CustomDetails: map[string]string{
-				"secret_path": a.SecretPath,
-				"expires_at":  a.ExpiresAt.UTC().Format(time.RFC3339),
-			},
 		},
 	}
 
@@ -65,7 +57,7 @@ func (p *pagerDutyNotifier) Send(a *Alert) error {
 		return fmt.Errorf("pagerduty: marshal event: %w", err)
 	}
 
-	resp, err := p.client.Post(p.endpoint, "application/json", bytes.NewReader(body))
+	resp, err := p.httpClient.Post(p.endpointURL, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("pagerduty: send request: %w", err)
 	}
@@ -74,6 +66,5 @@ func (p *pagerDutyNotifier) Send(a *Alert) error {
 	if resp.StatusCode != http.StatusAccepted {
 		return fmt.Errorf("pagerduty: unexpected status %d", resp.StatusCode)
 	}
-
 	return nil
 }
