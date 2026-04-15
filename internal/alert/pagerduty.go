@@ -8,66 +8,71 @@ import (
 	"time"
 )
 
-const pagerDutyEventsURL = "https://events.pagerduty.com/v2/enqueue"
+const defaultPagerDutyEndpoint = "https://events.pagerduty.com/v2/enqueue"
 
-// PagerDutyNotifier sends alerts to PagerDuty via the Events API v2.
-type PagerDutyNotifier struct {
-	RoutingKey string
-	Client     *http.Client
-	EventsURL  string // overridable for testing
+type pagerDutyNotifier struct {
+	routingKey string
+	endpoint   string
+	client     *http.Client
 }
 
 type pdPayload struct {
+	Summary   string `json:"summary"`
+	Severity  string `json:"severity"`
+	Source    string `json:"source"`
+	Timestamp string `json:"timestamp"`
+	CustomDetails map[string]string `json:"custom_details,omitempty"`
+}
+
+type pdEvent struct {
 	RoutingKey  string    `json:"routing_key"`
 	EventAction string    `json:"event_action"`
-	Payload     pdDetails `json:"payload"`
+	Payload     pdPayload `json:"payload"`
 }
 
-type pdDetails struct {
-	Summary  string `json:"summary"`
-	Severity string `json:"severity"`
-	Source   string `json:"source"`
-}
-
-// NewPagerDutyNotifier creates a PagerDutyNotifier with a default HTTP client.
-func NewPagerDutyNotifier(routingKey string) *PagerDutyNotifier {
-	return &PagerDutyNotifier{
-		RoutingKey: routingKey,
-		Client:     &http.Client{Timeout: 10 * time.Second},
-		EventsURL:  pagerDutyEventsURL,
+// NewPagerDutyNotifier creates a new PagerDuty notifier using the given routing key.
+func NewPagerDutyNotifier(routingKey string) Notifier {
+	return &pagerDutyNotifier{
+		routingKey: routingKey,
+		endpoint:   defaultPagerDutyEndpoint,
+		client:     &http.Client{Timeout: 10 * time.Second},
 	}
 }
 
-// Send triggers a PagerDuty incident for the given alert.
-func (p *PagerDutyNotifier) Send(a Alert) error {
+func (p *pagerDutyNotifier) Send(a *Alert) error {
 	severity := "warning"
 	if a.Severity == SeverityCritical {
 		severity = "critical"
 	}
 
-	pd := pdPayload{
-		RoutingKey:  p.RoutingKey,
+	event := pdEvent{
+		RoutingKey:  p.routingKey,
 		EventAction: "trigger",
-		Payload: pdDetails{
-			Summary:  a.Message,
-			Severity: severity,
-			Source:   a.SecretPath,
+		Payload: pdPayload{
+			Summary:   fmt.Sprintf("%s: %s", a.Title, a.Message),
+			Severity:  severity,
+			Source:    "vaultpulse",
+			Timestamp: time.Now().UTC().Format(time.RFC3339),
+			CustomDetails: map[string]string{
+				"secret_path": a.SecretPath,
+				"expires_at":  a.ExpiresAt.UTC().Format(time.RFC3339),
+			},
 		},
 	}
 
-	body, err := json.Marshal(pd)
+	body, err := json.Marshal(event)
 	if err != nil {
-		return fmt.Errorf("pagerduty: marshal payload: %w", err)
+		return fmt.Errorf("pagerduty: marshal event: %w", err)
 	}
 
-	resp, err := p.Client.Post(p.EventsURL, "application/json", bytes.NewReader(body))
+	resp, err := p.client.Post(p.endpoint, "application/json", bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("pagerduty: http post: %w", err)
+		return fmt.Errorf("pagerduty: send request: %w", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("pagerduty: unexpected status code %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusAccepted {
+		return fmt.Errorf("pagerduty: unexpected status %d", resp.StatusCode)
 	}
 
 	return nil
