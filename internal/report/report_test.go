@@ -57,6 +57,17 @@ func TestReport_Summary(t *testing.T) {
 	}
 }
 
+func TestReport_Summary_Empty(t *testing.T) {
+	r := report.New([]report.SecretStatus{})
+	expiring, expired := r.Summary()
+	if expiring != 0 {
+		t.Errorf("expected 0 expiring, got %d", expiring)
+	}
+	if expired != 0 {
+		t.Errorf("expected 0 expired, got %d", expired)
+	}
+}
+
 func TestReport_WriteTo_ContainsPaths(t *testing.T) {
 	r := report.New(sampleSecrets())
 	var buf bytes.Buffer
