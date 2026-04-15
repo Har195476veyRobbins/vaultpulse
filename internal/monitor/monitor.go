@@ -1,7 +1,7 @@
 package monitor
 
 import (
-	"context"
+	"fmt"
 	"log"
 	"time"
 
@@ -10,63 +10,81 @@ import (
 	"github.com/yourusername/vaultpulse/internal/vault"
 )
 
-// Monitor periodically checks Vault secrets and sends alerts for expiring ones.
+// Monitor periodically checks Vault secrets and fires alerts.
 type Monitor struct {
-	client    *vault.Client
+	vault     *vault.Client
 	notifiers []alert.Notifier
-	cfg       *config.Config
+	onAlert   func(alert.Alert)
+	warnTTL   time.Duration
 }
 
-// New creates a new Monitor with the given Vault client, notifiers, and config.
-func New(client *vault.Client, notifiers []alert.Notifier, cfg *config.Config) *Monitor {
-	return &Monitor{
-		client:    client,
+// New creates a Monitor from the given config and notifiers.
+func New(cfg *config.Config, notifiers []alert.Notifier) (*Monitor, error) {
+	client, err := vault.NewClient(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("creating vault client: %w", err)
+	}
+	m := &Monitor{
+		vault:     client,
 		notifiers: notifiers,
-		cfg:       cfg,
+		warnTTL:   time.Duration(cfg.WarnTTLDays) * 24 * time.Hour,
 	}
+	m.onAlert = m.dispatchAlert
+	return m, nil
 }
 
-// Run starts the monitoring loop, checking secrets at the configured interval.
-// It blocks until the context is cancelled.
-func (m *Monitor) Run(ctx context.Context) error {
-	ticker := time.NewTicker(m.cfg.CheckInterval)
-	defer ticker.Stop()
-
-	log.Printf("monitor: starting, check interval=%s", m.cfg.CheckInterval)
-
-	// Run once immediately before waiting for the first tick.
-	m.checkSecrets(ctx)
-
-	for {
-		select {
-		case <-ticker.C:
-			m.checkSecrets(ctx)
-		case <-ctx.Done():
-			log.Println("monitor: shutting down")
-			return ctx.Err()
-		}
-	}
-}
-
-// checkSecrets iterates over configured secret paths, retrieves metadata,
-// and fires alerts for any secrets that are expiring soon.
-func (m *Monitor) checkSecrets(ctx context.Context) {
-	for _, path := range m.cfg.SecretPaths {
-		meta, err := m.client.GetSecretMeta(ctx, path)
+// CheckSecrets fetches all configured secret paths and fires alerts for
+// secrets that are expiring soon or already expired.
+func (m *Monitor) CheckSecrets(paths []string) error {
+	var firstErr error
+	for _, p := range paths {
+		meta, err := m.vault.GetSecretMeta(p)
 		if err != nil {
-			log.Printf("monitor: failed to get secret meta for %q: %v", path, err)
-			continue
-		}
-
-		if !m.client.IsExpiringSoon(meta, m.cfg.WarnThreshold) {
-			continue
-		}
-
-		a := alert.NewAlert(path, meta.TTL, m.cfg.WarnThreshold)
-		for _, n := range m.notifiers {
-			if err := n.Send(ctx, a); err != nil {
-				log.Printf("monitor: notifier failed for %q: %v", path, err)
+			log.Printf("[monitor] error checking %s: %v", p, err)
+			if firstErr == nil {
+				firstErr = err
 			}
+			continue
 		}
+
+		if meta.TTL <= 0 {
+			continue
+		}
+
+		if vault.IsExpiringSoon(meta, m.warnTTL) {
+			severity := alert.SeverityWarning
+			if meta.TTL < 0 {
+				severity = alert.SeverityCritical
+			}
+			a := alert.NewAlert(
+				fmt.Sprintf("secret %s expires in %s", p, (time.Duration(meta.TTL)*time.Second).Round(time.Second)),
+				severity,
+			)
+			m.fireAlert(a)
+		}
+	}
+	return firstErr
+}
+
+// fireAlert invokes the configured onAlert handler (testable hook).
+func (m *Monitor) fireAlert(a alert.Alert) {
+	m.onAlert(a)
+}
+
+// dispatchAlert sends an alert to all registered notifiers.
+func (m *Monitor) dispatchAlert(a alert.Alert) {
+	for _, n := range m.notifiers {
+		if err := n.Send(a); err != nil {
+			log.Printf("[monitor] notifier error: %v", err)
+		}
+	}
+}
+
+// testConfig returns a minimal config pointing at the given Vault URL.
+func testConfig(t interface{ Helper(); Fatal(...interface{}) }, addr string) *config.Config {
+	t.Helper()
+	return &config.Config{
+		Vault: config.VaultConfig{Address: addr, Token: "test-token"},
+		WarnTTLDays: 7,
 	}
 }
