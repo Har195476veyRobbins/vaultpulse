@@ -17,10 +17,16 @@ vault:
 
 monitor:
   # How often to poll Vault for secret metadata
+  # Accepts Go duration strings: e.g. 30s, 5m, 1h
   interval: 5m
 
   # Alert when a secret expires within this window
+  # Accepts Go duration strings: e.g. 24h, 168h, 720h
   expiry_threshold: 168h  # 7 days
+
+  # Number of concurrent workers used to fetch secret metadata
+  # Increase for large path lists; defaults to 4 if unset
+  workers: 4
 
 alert:
   slack:
