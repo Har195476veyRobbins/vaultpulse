@@ -49,13 +49,23 @@ func newRenewalMockServer(t *testing.T) *httptest.Server {
 	}))
 }
 
+// newRenewalClient is a helper that creates a Client pointed at the given test server URL.
+func newRenewalClient(t *testing.T, serverURL string) *Client {
+	t.Helper()
+	cfg := api.DefaultConfig()
+	cfg.Address = serverURL
+	client, err := NewClient(cfg, "test-token")
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+	return client
+}
+
 func TestRenewLease_Success(t *testing.T) {
 	srv := newRenewalMockServer(t)
 	defer srv.Close()
 
-	cfg := api.DefaultConfig()
-	cfg.Address = srv.URL
-	client, _ := NewClient(cfg, "test-token")
+	client := newRenewalClient(t, srv.URL)
 
 	result := client.RenewLease(context.Background(), "secret/data/myapp/db", 2*time.Hour)
 	if result.Err != nil {
@@ -73,9 +83,7 @@ func TestRenewLease_NoLeaseID(t *testing.T) {
 	srv := newRenewalMockServer(t)
 	defer srv.Close()
 
-	cfg := api.DefaultConfig()
-	cfg.Address = srv.URL
-	client, _ := NewClient(cfg, "test-token")
+	client := newRenewalClient(t, srv.URL)
 
 	result := client.RenewLease(context.Background(), "secret/data/nolease", time.Hour)
 	if result.Err == nil {
@@ -90,9 +98,7 @@ func TestRenewLease_PathNotFound(t *testing.T) {
 	srv := newRenewalMockServer(t)
 	defer srv.Close()
 
-	cfg := api.DefaultConfig()
-	cfg.Address = srv.URL
-	client, _ := NewClient(cfg, "test-token")
+	client := newRenewalClient(t, srv.URL)
 
 	result := client.RenewLease(context.Background(), "secret/data/missing", time.Hour)
 	if result.Err == nil {
