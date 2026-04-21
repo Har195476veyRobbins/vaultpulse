@@ -10,7 +10,7 @@ import (
 // PluginChecker alerts when non-builtin (external) plugins are registered,
 // which may indicate unexpected or unaudited extensions.
 type PluginChecker struct {
-	client *vault.Client
+	client    *vault.Client
 	notifiers []alert.Notifier
 }
 
@@ -36,10 +36,19 @@ func (p *PluginChecker) Check() error {
 			fmt.Sprintf("Non-builtin plugin registered: %s (type=%s, version=%s)",
 				plugin.Name, plugin.Type, plugin.Version),
 		)
-		for _, n := range p.notifiers {
-			if err := n.Send(a); err != nil {
-				return fmt.Errorf("plugin check notify: %w", err)
-			}
+		if err := p.notify(a); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// notify sends the given alert to all configured notifiers, returning the first
+// error encountered.
+func (p *PluginChecker) notify(a alert.Alert) error {
+	for _, n := range p.notifiers {
+		if err := n.Send(a); err != nil {
+			return fmt.Errorf("plugin check notify: %w", err)
 		}
 	}
 	return nil
