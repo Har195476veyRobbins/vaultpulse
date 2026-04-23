@@ -75,3 +75,18 @@ func TestLookupWrappingToken_NonOKStatus(t *testing.T) {
 		t.Fatal("expected error for non-OK status")
 	}
 }
+
+func TestLookupWrappingToken_MalformedResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{invalid-json`))
+	}))
+	defer srv.Close()
+
+	c := &Client{address: srv.URL, http: srv.Client()}
+	_, err := c.LookupWrappingToken("some-token")
+	if err == nil {
+		t.Fatal("expected error for malformed JSON response")
+	}
+}
