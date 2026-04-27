@@ -46,11 +46,17 @@ func (e *EnginesChecker) Check() error {
 			fmt.Sprintf("required secret engine type %q is not mounted", required),
 			alert.SeverityWarning,
 		)
-		for _, n := range e.notifiers {
-			if sendErr := n.Send(a); sendErr != nil {
-				log.Printf("engines_check: notifier error: %v", sendErr)
-			}
-		}
+		e.sendAlert(a)
 	}
 	return nil
+}
+
+// sendAlert delivers the given alert to all registered notifiers, logging any
+// delivery errors without aborting the remaining notifiers.
+func (e *EnginesChecker) sendAlert(a alert.Alert) {
+	for _, n := range e.notifiers {
+		if sendErr := n.Send(a); sendErr != nil {
+			log.Printf("engines_check: notifier error: %v", sendErr)
+		}
+	}
 }
